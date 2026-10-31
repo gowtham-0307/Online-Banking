@@ -1,4 +1,4 @@
-# Apex Banking Microservices Platform
+# Banking Microservices Platform
 
 An enterprise-grade, event-driven distributed banking architecture engineered with **Java 17 / 21**, **Spring Boot 3**, **MySQL**, **Apache Kafka**, **OpenTelemetry (OTel)**, **SLF4J / MDC Structured Logging**, **Prometheus**, and **Grafana**.
 
