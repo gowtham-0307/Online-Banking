@@ -1,0 +1,259 @@
+================================================================================
+INTELLIJ IDEA BEGINNER'S WALKTHROUGH & EXECUTION GUIDE
+Apex Banking Microservices Platform
+================================================================================
+
+Welcome! You have just opened the Apex Banking Microservices project in IntelliJ IDEA.
+This guide assumes zero prior knowledge of this codebase and explains every single
+click, configuration, command, and behind-the-scenes event step-by-step.
+
+TABLE OF CONTENTS:
+------------------
+1. What You See Right Now in IntelliJ
+2. What Needs to be Changed in the Project?
+3. Step 1: One-Time IntelliJ Setup (2 Minutes)
+4. Step 2: Starting the Supporting Infrastructure (Docker)
+5. Step 3: Running the 5 Microservices Inside IntelliJ
+6. Step 4: Testing the Banking System (How It Works Behind the Scenes)
+7. Step 5: How to View Dashboards, Traces, and Logs
+8. Troubleshooting Common Beginner Mistakes
+
+================================================================================
+1. WHAT YOU SEE RIGHT NOW IN INTELLIJ
+================================================================================
+
+When you open this project in IntelliJ IDEA:
+- Left Pane (Project View): You will see the project folders:
+  * common-dto (Shared data structures, enums, events)
+  * api-gateway (Port 8080 - Front door router)
+  * account-service (Port 8081 - Balance ledger)
+  * transaction-service (Port 8082 - Fund transfer engine)
+  * fraud-detection-service (Port 8083 - Risk scoring)
+  * notification-service (Port 8084 - SMS/Email alerts)
+  * docker/ (MySQL, Prometheus, Grafana configs)
+  * pom.xml (The master Maven blueprint)
+- Center Pane: Editor window.
+- Right Pane: The Maven tool window tab.
+- Bottom Bar: Terminal tab (Alt + F12), Run tab, and Git tab.
+
+================================================================================
+2. WHAT NEEDS TO BE CHANGED IN THE PROJECT?
+================================================================================
+
+THE DIRECT ANSWER:
+Nothing in the Java code needs to be modified. The code is fully written,
+production-ready, and configured.
+
+WHAT ABOUT PORTS AND CONFIGURATION?
+- Ports Checked: We verified your machine; ports 3306 (MySQL), 9092 (Kafka),
+  8080 (Gateway), 8081 (Account), 8082 (Transaction), 8083 (Fraud), and 8084
+  (Notification) are completely free. There are zero port collisions.
+- Configuration Defaults: Every microservice's application.yml is configured with
+  intelligent defaults (localhost), meaning that when you start services directly
+  inside IntelliJ, they automatically talk to localhost:3306 for MySQL,
+  localhost:9092 for Kafka, and localhost:4318 for Jaeger!
+
+================================================================================
+3. STEP 1: ONE-TIME INTELLIJ SETUP (2 MINUTES)
+================================================================================
+
+Complete these 3 quick configurations inside IntelliJ:
+
+1.1 SET PROJECT JDK TO JAVA 17+
+1. In the top menu, click File -> Project Structure... (or press Ctrl + Alt + Shift + S).
+2. On the left, select Project.
+3. Under SDK, ensure Java 17, 21, or 26 is selected.
+4. Under Language level, choose 17 - Sealed types, always-strict floating-point.
+5. Click Apply, then OK.
+
+1.2 ENABLE ANNOTATION PROCESSING (CRUCIAL FOR LOMBOK)
+1. In the top menu, click File -> Settings (or press Ctrl + Alt + S).
+2. In the search box at the top-left, type: Annotation Processors
+   (or navigate: Build, Execution, Deployment -> Compiler -> Annotation Processors).
+3. Check the box: [x] Enable annotation processing.
+4. Click Apply, then OK.
+Why: The project uses Project Lombok (@Getter, @Setter, @Builder). This setting
+instructs IntelliJ to generate getters/setters during compilation, preventing
+red squiggly lines in the editor.
+
+1.3 SYNC / RELOAD MAVEN PROJECTS
+1. On the far right edge of your IntelliJ window, click the Maven tool window tab.
+2. In the Maven panel, click the Reload All Maven Projects icon
+   (the two circular arrows in the top left of the Maven panel).
+3. Wait 15-30 seconds for IntelliJ to index the modules and download dependencies.
+
+================================================================================
+4. STEP 2: STARTING SUPPORTING INFRASTRUCTURE (DOCKER)
+================================================================================
+
+Our microservices need 5 supporting systems to store data, stream messages,
+and collect traces:
+1. MySQL Server (Stores bank accounts and transaction history)
+2. Apache Kafka (Streams events between services)
+3. Jaeger (Collects OpenTelemetry traces)
+4. Prometheus (Gathers health metrics)
+5. Grafana (Displays visual monitoring charts)
+
+You do NOT need to manually install MySQL, Kafka, or Grafana on Windows.
+We run them with one command using Docker!
+
+HOW TO START INFRASTRUCTURE:
+1. Open the built-in Terminal in IntelliJ at the bottom bar (or press Alt + F12).
+2. Type or paste the following command and press Enter:
+   docker compose up -d mysql kafka jaeger prometheus grafana
+3. Wait about 10 seconds. You will see:
+   [+] Running 6/6
+   Container apex-mysql       Started
+   Container apex-kafka       Started
+   Container apex-jaeger      Started
+   Container apex-prometheus  Started
+   Container apex-grafana     Started
+
+What happens behind the scenes:
+- MySQL automatically executes docker/mysql/init.sql, creating 4 banking databases:
+  apex_account_db, apex_transaction_db, apex_fraud_db, apex_notification_db.
+- Kafka boots in native KRaft mode on port 9092.
+- Jaeger starts listening for traces on port 4318.
+- Prometheus begins polling microservice metrics on port 9090.
+- Grafana boots with our pre-built Banking Dashboard on port 3000.
+
+================================================================================
+5. STEP 3: RUNNING THE 5 MICROSERVICES INSIDE INTELLIJ
+================================================================================
+
+Now you run the Java microservices. Run them in the recommended order below:
+
+SERVICE 1: account-service (Port 8081)
+1. In the Project pane on the left, navigate to:
+   account-service -> src -> main -> java -> com.apex.account -> AccountServiceApplication.java
+2. Double-click to open it.
+3. Click the Green Play Arrow next to "public class AccountServiceApplication".
+4. Click Run 'AccountServiceApplication'.
+5. Console will end with: ">>> Apex Banking Account Service initialized on port 8081 <<<"
+
+SERVICE 2: transaction-service (Port 8082)
+1. Navigate to:
+   transaction-service -> src -> main -> java -> com.apex.transaction -> TransactionServiceApplication.java
+2. Open it and click Green Play Arrow -> Run 'TransactionServiceApplication'.
+3. Console will end with: ">>> Apex Banking Transaction Service initialized on port 8082 <<<"
+
+SERVICE 3: fraud-detection-service (Port 8083)
+1. Navigate to:
+   fraud-detection-service -> src -> main -> java -> com.apex.fraud -> FraudDetectionApplication.java
+2. Open it and click Green Play Arrow -> Run 'FraudDetectionApplication'.
+3. Console will end with: ">>> Apex Banking Fraud Detection Service initialized on port 8083 <<<"
+
+SERVICE 4: notification-service (Port 8084)
+1. Navigate to:
+   notification-service -> src -> main -> java -> com.apex.notification -> NotificationServiceApplication.java
+2. Open it and click Green Play Arrow -> Run 'NotificationServiceApplication'.
+3. Console will end with: ">>> Apex Banking Notification Service initialized on port 8084 <<<"
+
+SERVICE 5: api-gateway (Port 8080)
+1. Navigate to:
+   api-gateway -> src -> main -> java -> com.apex.gateway -> ApiGatewayApplication.java
+2. Open it and click Green Play Arrow -> Run 'ApiGatewayApplication'.
+3. Console will end with: ">>> Apex Banking API Gateway started successfully on port 8080 <<<"
+
+================================================================================
+6. STEP 4: TESTING THE BANKING SYSTEM (HOW IT WORKS BEHIND THE SCENES)
+================================================================================
+
+QUICK AUTOMATED TEST:
+In IntelliJ's Terminal (Alt + F12), run:
+  .\test-api.ps1
+This executes 10 end-to-end integration tests and prints [PASS] for all steps.
+
+MANUAL WALKTHROUGH VIA CURL:
+
+Request 1: Open an Account for Alice Smith ($5,000 Deposit)
+  curl -X POST http://localhost:8080/api/v1/accounts -H "Content-Type: application/json" -d "{\"customerId\":\"CUST-1001\",\"customerName\":\"Alice Smith\",\"email\":\"alice@bank.com\",\"phoneNumber\":\"+1-555-0101\",\"accountType\":\"CHECKING\",\"initialDeposit\":5000.00,\"currency\":\"USD\"}"
+  What happens: Gateway routes to Account Service. A unique account number is
+  generated (e.g. APX1001). Saved in MySQL with balance = 5000.00, version = 0.
+
+Request 2: Open an Account for Bob Jones ($1,200 Deposit)
+  curl -X POST http://localhost:8080/api/v1/accounts -H "Content-Type: application/json" -d "{\"customerId\":\"CUST-1002\",\"customerName\":\"Bob Jones\",\"email\":\"bob@bank.com\",\"phoneNumber\":\"+1-555-0102\",\"accountType\":\"SAVINGS\",\"initialDeposit\":1200.00,\"currency\":\"USD\"}"
+  What happens: Creates Bob's account (e.g. APX1002).
+
+Request 3: Alice Transfers $400 to Bob (The Full Microservices Dance!)
+  curl -X POST http://localhost:8080/api/v1/transactions/transfer -H "Content-Type: application/json" -d "{\"sourceAccountNumber\":\"<ALICE_ACC>\",\"targetAccountNumber\":\"<BOB_ACC>\",\"amount\":400.00,\"currency\":\"USD\",\"description\":\"Invoice #101\",\"idempotencyKey\":\"KEY-TRANS-01\"}"
+  What happens:
+  1. Gateway forwards to Transaction Service.
+  2. Transaction Service verifies idempotencyKey is new.
+  3. Calls Account Service via REST: debits Alice $400 (balance becomes $4,600, version becomes 1).
+  4. Calls Account Service via REST: credits Bob $400 (balance becomes $1,600).
+  5. Saves transaction state as COMPLETED.
+  6. Asynchronously publishes TransactionCreatedEvent to Kafka topic "bank.transactions".
+  7. Fraud Detection Service consumes event: evaluates risk score (Score: 0, LOW).
+  8. Notification Service consumes event: formats Email receipt for Alice and Bob.
+
+Request 4: Test Idempotency Protection (Re-sending the Exact Same Transfer)
+  Re-run the exact same curl command from Request 3 with "KEY-TRANS-01".
+  What happens: Transaction Service queries MySQL and sees KEY-TRANS-01 already exists.
+  Returns the original transaction receipt immediately! Alice is NOT debited a second time.
+
+Request 5: Trigger Real-Time Fraud Alert ($15,000 Transfer > $10,000 Threshold)
+  1. Deposit $20,000 into Alice's account:
+     curl -X POST http://localhost:8080/api/v1/accounts/credit -H "Content-Type: application/json" -d "{\"accountNumber\":\"<ALICE_ACC>\",\"amount\":20000.00,\"referenceId\":\"BONUS\"}"
+  2. Transfer $15,000 to Bob:
+     curl -X POST http://localhost:8080/api/v1/transactions/transfer -H "Content-Type: application/json" -d "{\"sourceAccountNumber\":\"<ALICE_ACC>\",\"targetAccountNumber\":\"<BOB_ACC>\",\"amount\":15000.00,\"currency\":\"USD\",\"description\":\"Large wire transfer\",\"idempotencyKey\":\"KEY-FRAUD-01\"}"
+  What happens:
+  - Amount $15,000 exceeds $10,000 threshold.
+  - FraudRuleEngine assigns Risk Score = 75 (HIGH RISK).
+  - Emits FraudAlertEvent to Kafka topic "bank.fraud-alerts".
+  - Notification Service consumes alert and dispatches URGENT SMS SECURITY WARNING.
+  - Query alerts: curl http://localhost:8080/api/v1/fraud/alerts/high-risk
+
+================================================================================
+7. STEP 5: HOW TO VIEW DASHBOARDS, TRACES, AND LOGS
+================================================================================
+
+1. JAEGER DISTRIBUTED TRACING:
+   - Open browser: http://localhost:16686
+   - Select Service "transaction-service" -> Click "Find Traces".
+   - Click on any trace to inspect the complete span waterfall across Gateway,
+     Transaction Service, Account Service, Kafka, and Consumer services.
+
+2. GRAFANA MONITORING DASHBOARD:
+   - Open browser: http://localhost:3000
+   - Login: admin / admin
+   - Open "Apex Banking - Distributed Microservices Dashboard".
+   - Displays live KPIs: Completed vs Failed Transactions, Fraud Alerts,
+     Dispatched Notifications, P95 Latency, and JVM Heap Memory.
+
+3. PROMETHEUS METRIC EXPLORER:
+   - Open browser: http://localhost:9090
+   - Query: sum(apex_banking_transactions_completed_total_total)
+
+4. READING STRUCTURED LOGS IN INTELLIJ:
+   Click any running service console in IntelliJ. Notice the bracketed metadata:
+   [traceId=... spanId=... corrId=...]
+   Copy the traceId and paste it into Jaeger to see the visual trace diagram!
+
+================================================================================
+8. TROUBLESHOOTING COMMON BEGINNER MISTAKES
+================================================================================
+
+Mistake 1: Red squiggly lines in Java files
+Fix: File -> Settings -> Build, Execution, Deployment -> Compiler ->
+Annotation Processors -> Check "Enable annotation processing" -> OK.
+
+Mistake 2: "Connection refused: localhost:3306" when starting services
+Fix: In IntelliJ Terminal (Alt + F12), run:
+docker compose up -d mysql kafka jaeger prometheus grafana
+Wait 10 seconds, then restart the service.
+
+Mistake 3: Starting API Gateway first
+Fix: Start the domain microservices (Account, Transaction, Fraud, Notification)
+first, then start API Gateway.
+
+================================================================================
+SUMMARY OF WHAT TO DO RIGHT NOW IN INTELLIJ:
+1. Press Ctrl + Alt + S -> Enable Annotation Processors.
+2. Open Terminal (Alt + F12) -> Run:
+   docker compose up -d mysql kafka jaeger prometheus grafana
+3. Run the 5 applications via their Green Play Arrows (Account, Transaction, Fraud, Notification, Gateway).
+4. In Terminal, run:
+   .\test-api.ps1
+5. Open browser: http://localhost:3000 (Grafana) and http://localhost:16686 (Jaeger).
+================================================================================

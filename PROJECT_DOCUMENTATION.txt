@@ -1,0 +1,367 @@
+================================================================================
+APEX BANKING MICROSERVICES PLATFORM
+Comprehensive Component Encyclopedia, Execution Manual & Operational Runbook
+================================================================================
+
+TABLE OF CONTENTS
+-----------------
+1. System Overview & Architecture
+2. Detailed Explanation of Every Component
+3. Step-by-Step Execution Guide (Docker & Local IDE)
+4. End-to-End API Test Walkthrough (curl & PowerShell)
+5. Observability & Monitoring (Jaeger, Prometheus, Grafana, Logs)
+6. Troubleshooting & Configuration Adjustments
+7. Technical Interview Defense Guide
+
+================================================================================
+1. SYSTEM OVERVIEW & ARCHITECTURE
+================================================================================
+
+The Apex Banking Platform is an enterprise-grade distributed core-banking
+system engineered with Java 17, Spring Boot 3, MySQL 8, Apache Kafka (KRaft),
+OpenTelemetry (OTel), Prometheus, and Grafana.
+
+Architecture Highlights:
+- Database-per-Microservice isolation
+- JPA Optimistic Concurrency Control (@Version) to prevent balance race conditions
+- Distributed Idempotency Key validation to prevent duplicate debits on retries
+- Asynchronous Event-Driven Choreography via Kafka
+- End-to-End Distributed Tracing across REST HTTP and Kafka messaging
+- Unified Observability (Prometheus Metrics, Jaeger Traces, SLF4J MDC Structured Logs)
+
+SERVICE & PORT MAPPINGS:
+--------------------------------------------------------------------------------
+Service Name              Port      Database                 Technology
+--------------------------------------------------------------------------------
+api-gateway               8080      None                     Spring Cloud Gateway, OTel
+account-service           8081      apex_account_db          Spring Boot, MySQL, JPA
+transaction-service       8082      apex_transaction_db      Spring Boot, Kafka, MySQL
+fraud-detection-service   8083      apex_fraud_db            Spring Boot, Kafka, MySQL
+notification-service      8084      apex_notification_db     Spring Boot, Kafka, MySQL
+MySQL 8.0                 3306      4 Isolated DB Schemas    MySQL Community Server
+Apache Kafka              9092      KRaft Mode (No ZooKeeper)Apache Kafka 3.7+
+Jaeger UI                 16686     Traces Storage           Jaeger All-In-One
+Prometheus                9090      Time-series DB           Prometheus Server
+Grafana                   3000      Visualization Dashboards Grafana 10+
+--------------------------------------------------------------------------------
+
+================================================================================
+2. DETAILED EXPLANATION OF EVERY COMPONENT
+================================================================================
+
+COMPONENT 1: common-dto (Shared Domain Contracts)
+-------------------------------------------------
+Directory: common-dto/
+Role: Encapsulates shared domain objects, enums, DTOs, and Kafka events.
+Key Files:
+- AccountType.java: CHECKING, SAVINGS, BUSINESS, INVESTMENT
+- AccountStatus.java: ACTIVE, SUSPENDED, FROZEN, CLOSED
+- TransactionStatus.java: PENDING, COMPLETED, FAILED, REJECTED
+- TransactionCreatedEvent.java: Immutable Kafka domain event with transaction ID,
+  accounts, amount, currency, timestamp, and correlation ID.
+- FraudAlertEvent.java: Kafka event emitted on suspicious transactions carrying
+  risk score, risk level, rules triggered, and notes.
+- TransferRequest.java: DTO carrying source, target, amount, currency, and
+  the crucial idempotencyKey.
+
+COMPONENT 2: api-gateway (Edge Router & Tracing Initiator)
+----------------------------------------------------------
+Directory: api-gateway/ (Port 8080)
+Role: The single entry point for all external client requests.
+Key Files & Responsibilities:
+- LoggingAndTracingFilter.java:
+  * Intercepts every inbound HTTP request.
+  * Checks for "X-Correlation-ID" header. If missing, generates a unique UUID.
+  * Injects correlation ID into the downstream request and client response headers.
+  * Measures round-trip execution latency in milliseconds.
+  * Emits structured SLF4J log lines at ingress and egress.
+- application.yml:
+  * Routes /api/v1/accounts/**        -> account-service:8081
+  * Routes /api/v1/transactions/**    -> transaction-service:8082
+  * Routes /api/v1/fraud/**           -> fraud-detection-service:8083
+  * Routes /api/v1/notifications/**   -> notification-service:8084
+- FallbackController.java: Returns structured HTTP 503 fallback responses.
+
+COMPONENT 3: account-service (Core Banking Ledger & Balances)
+-------------------------------------------------------------
+Directory: account-service/ (Port 8081)
+Database: apex_account_db
+Role: Manages customer accounts, deposits, debits, credits, and ledger audits.
+Key Files & Responsibilities:
+- BankAccount.java:
+  * Entity holding account details and balance.
+  * Contains "@Version private Long version": Optimistic Concurrency Control.
+    If two concurrent requests try to debit the account at the same millisecond,
+    the first committer succeeds and increments the version. The second transaction
+    fails with an OptimisticLockingFailureException, preventing double debits
+    without performance-killing table locks.
+- AccountAuditLog.java:
+  * Immutable ledger recording balance before, balance after, amount, action type
+    (ACCOUNT_CREATED, DEBIT, CREDIT), and reference ID for audit trails.
+- AccountServiceImpl.java:
+  * debitAccount(): Checks account status is ACTIVE, checks balance >= amount,
+    subtracts balance, logs audit record, and updates Prometheus counter.
+  * creditAccount(): Validates status, adds balance, logs audit record.
+- GlobalExceptionHandler.java:
+  * Translates business exceptions into standard HTTP error responses (400, 404, 409).
+
+COMPONENT 4: transaction-service (Payment Orchestrator & Kafka Producer)
+------------------------------------------------------------------------
+Directory: transaction-service/ (Port 8082)
+Database: apex_transaction_db
+Role: Handles inter-account transfers, enforces idempotency, calls Account Service,
+and publishes Kafka events.
+Key Files & Responsibilities:
+- TransactionRecord.java:
+  * Maps the transactions table.
+  * Features a UNIQUE INDEX on idempotency_key.
+- TransactionServiceImpl.java:
+  * Step 1 (Idempotency Check): Queries DB for idempotencyKey. If found, returns
+    existing transaction record immediately without reprocessing.
+  * Step 2 (Account Validation): Verifies source != target and calls Account
+    Service to ensure both accounts exist and are ACTIVE.
+  * Step 3 (Debit Source): Invokes REST call to debit source account.
+  * Step 4 (Credit Target with Compensation): Invokes REST call to credit target.
+    If credit fails, initiates a compensating transaction (re-crediting source)
+    to guarantee zero money loss (Saga pattern).
+  * Step 5 (Kafka Publish): Emits TransactionCreatedEvent to "bank.transactions".
+- TransactionProducer.java:
+  * Injects X-Correlation-ID into Kafka record headers.
+  * Asynchronously logs topic, partition, offset, and transaction ID.
+
+COMPONENT 5: fraud-detection-service (Real-Time Risk Scoring Engine)
+--------------------------------------------------------------------
+Directory: fraud-detection-service/ (Port 8083)
+Database: apex_fraud_db
+Role: Asynchronously evaluates every transaction against compliance rules.
+Key Files & Responsibilities:
+- TransactionConsumer.java:
+  * Listens to Kafka topic "bank.transactions".
+  * Extracts correlation ID and trace headers into MDC.
+- FraudRuleEngine.java:
+  * Rule 1 (High Value): Transfers >= $10,000 add +65 to risk score.
+                         Transfers >= $50,000 add +90 to risk score.
+  * Rule 2 (Round Amount Anomaly): Large round numbers add +10.
+  * Risk Levels: LOW (0-29), MEDIUM (30-59), HIGH (60-84), CRITICAL (85-100).
+  * If risk is HIGH or CRITICAL, publishes FraudAlertEvent to "bank.fraud-alerts".
+- FraudAssessmentRecord.java:
+  * Stores risk scores, rules triggered, and notes in MySQL for audits.
+
+COMPONENT 6: notification-service (Customer Alert Dispatcher)
+-------------------------------------------------------------
+Directory: notification-service/ (Port 8084)
+Database: apex_notification_db
+Role: Listens to transaction and security events and dispatches alerts.
+Key Files & Responsibilities:
+- BankingEventNotificationConsumer.java:
+  * Consumes "bank.transactions" -> formats Email transfer confirmation.
+  * Consumes "bank.fraud-alerts" -> formats SMS urgent security alert.
+- NotificationDispatcher.java:
+  * Dispatches alert, logs structured SLF4J audit entry, updates Prometheus
+    counters (tagged by channel and type).
+- NotificationRecord.java:
+  * Persists full notification history in MySQL.
+
+COMPONENT 7: Infrastructure & Observability
+-------------------------------------------
+1. MySQL 8.0: Automatically executes docker/mysql/init.sql to create 4 databases:
+   apex_account_db, apex_transaction_db, apex_fraud_db, apex_notification_db.
+2. Apache Kafka: Single-node KRaft broker (zero ZooKeeper dependency).
+3. Jaeger (OTel): Collects distributed traces at http://localhost:16686.
+4. Prometheus: Scrapes all 5 services every 5 seconds at http://localhost:9090.
+5. Grafana: Visual dashboards at http://localhost:3000 (admin / admin).
+
+================================================================================
+3. STEP-BY-STEP EXECUTION GUIDE
+================================================================================
+
+METHOD A: DOCKER COMPOSE (RECOMMENDED)
+--------------------------------------
+Prerequisites: Docker Desktop installed, Java 17+, Maven 3.8+.
+
+Step 1: Open PowerShell or Command Prompt in the project folder:
+  cd C:\Users\ELCOT\.gemini\antigravity\scratch\apex-banking-microservices
+
+Step 2: Build the Java applications:
+  mvn clean package -DskipTests
+
+Step 3: Start all containers:
+  .\build-and-run.ps1
+  (Or on Linux/macOS: ./build-and-run.sh)
+
+Step 4: Check running containers:
+  docker compose ps
+
+All 10 containers should show "Up" or "healthy".
+
+METHOD B: LOCAL IDE RUN (INTELLIJ IDEA / VS CODE / ECLIPSE)
+-----------------------------------------------------------
+Step 1: Start only background infrastructure in Docker:
+  docker compose up -d mysql kafka jaeger prometheus grafana
+
+Step 2: Open the folder in your IDE:
+  Select "C:\Users\ELCOT\.gemini\antigravity\scratch\apex-banking-microservices"
+  as your project root and import as a Maven project.
+
+Step 3: Run the Spring Boot main classes in this sequence:
+  1. AccountServiceApplication      (Port 8081)
+  2. TransactionServiceApplication  (Port 8082)
+  3. FraudDetectionApplication      (Port 8083)
+  4. NotificationServiceApplication (Port 8084)
+  5. ApiGatewayApplication          (Port 8080)
+
+================================================================================
+4. END-TO-END TEST WALKTHROUGH
+================================================================================
+
+AUTOMATED TEST SUITE:
+Run: .\test-api.ps1 (or ./test-api.sh)
+This script runs 10 end-to-end integration and resilience tests.
+
+MANUAL STEP-BY-STEP VIA CURL:
+
+Step 1: Check Gateway Health
+  curl http://localhost:8080/actuator/health
+  Response: {"status":"UP"}
+
+Step 2: Create Account for Alice Smith ($5,000 initial balance)
+  curl -X POST http://localhost:8080/api/v1/accounts \
+    -H "Content-Type: application/json" \
+    -H "X-Correlation-ID: run-01" \
+    -d '{
+      "customerId": "CUST-1001",
+      "customerName": "Alice Smith",
+      "email": "alice.smith@apexbank.com",
+      "phoneNumber": "+1-555-0101",
+      "accountType": "CHECKING",
+      "initialDeposit": 5000.00,
+      "currency": "USD"
+    }'
+  (Save Alice's account number from response, e.g., APX1001)
+
+Step 3: Create Account for Bob Jones ($1,200 initial balance)
+  curl -X POST http://localhost:8080/api/v1/accounts \
+    -H "Content-Type: application/json" \
+    -H "X-Correlation-ID: run-02" \
+    -d '{
+      "customerId": "CUST-1002",
+      "customerName": "Bob Jones",
+      "email": "bob.jones@apexbank.com",
+      "phoneNumber": "+1-555-0102",
+      "accountType": "SAVINGS",
+      "initialDeposit": 1200.00,
+      "currency": "USD"
+    }'
+  (Save Bob's account number from response, e.g., APX1002)
+
+Step 4: Execute Normal Transfer ($400: Alice -> Bob)
+  curl -X POST http://localhost:8080/api/v1/transactions/transfer \
+    -H "Content-Type: application/json" \
+    -H "X-Correlation-ID: run-03" \
+    -d '{
+      "sourceAccountNumber": "<ALICE_ACC>",
+      "targetAccountNumber": "<BOB_ACC>",
+      "amount": 400.00,
+      "currency": "USD",
+      "description": "Consulting fee",
+      "idempotencyKey": "KEY-TRANSFER-01"
+    }'
+
+Step 5: Verify Idempotency Protection
+  Re-send the exact same request from Step 4 with "KEY-TRANSFER-01".
+  Result: Returns existing transaction record immediately.
+  Check balance: Alice still has $4,600 (not $4,200).
+
+Step 6: Trigger Fraud Detection ($15,000 Transfer > $10,000 Threshold)
+  1. Deposit $20,000 to Alice:
+     curl -X POST http://localhost:8080/api/v1/accounts/credit \
+       -H "Content-Type: application/json" \
+       -d '{"accountNumber": "<ALICE_ACC>", "amount": 20000.00, "referenceId": "BONUS"}'
+
+  2. Transfer $15,000 to Bob:
+     curl -X POST http://localhost:8080/api/v1/transactions/transfer \
+       -H "Content-Type: application/json" \
+       -d '{
+         "sourceAccountNumber": "<ALICE_ACC>",
+         "targetAccountNumber": "<BOB_ACC>",
+         "amount": 15000.00,
+         "currency": "USD",
+         "description": "Property down payment",
+         "idempotencyKey": "KEY-FRAUD-01"
+       }'
+
+Step 7: Check High-Risk Fraud Alerts
+  curl http://localhost:8080/api/v1/fraud/alerts/high-risk
+  Result: Risk score 75, HIGH risk level, rule HIGH_VALUE_EXCEEDED_10K.
+
+Step 8: Check Customer Notifications
+  curl http://localhost:8080/api/v1/notifications/recipient/<ALICE_ACC>
+  Result: Contains both Email transfer receipt and SMS security warning.
+
+================================================================================
+5. OBSERVABILITY & MONITORING GUIDE
+================================================================================
+
+1. JAEGER DISTRIBUTED TRACING:
+   - URL: http://localhost:16686
+   - Select Service "api-gateway" or "transaction-service" -> Click "Find Traces".
+   - Click on any trace to inspect the complete span hierarchy across Gateway,
+     Transaction Service, Account Service, and Kafka asynchronous consumers.
+
+2. GRAFANA MONITORING DASHBOARD:
+   - URL: http://localhost:3000
+   - Login: admin / admin
+   - Open "Apex Banking - Distributed Microservices Dashboard".
+   - Displays real-time KPIs: Transactions Completed vs Failed, Fraud Alerts,
+     Dispatched Notifications, P95 Latency, and JVM Heap Memory.
+
+3. PROMETHEUS METRIC EXPLORER:
+   - URL: http://localhost:9090
+   - Example query: sum(apex_banking_transactions_completed_total_total)
+
+4. STRUCTURED LOGGING:
+   Inspect logs with command: docker logs apex-transaction-service
+   Format: [traceId=... spanId=... corrId=...]
+   Allows instant correlation of any request across all 5 microservices.
+
+================================================================================
+6. POST-CREATION ADJUSTMENTS & TROUBLESHOOTING
+================================================================================
+
+1. MySQL Port 3306 Conflict:
+   If port 3306 is occupied by an existing local MySQL service, edit
+   docker-compose.yml: change "3306:3306" to "3307:3306".
+
+2. Docker Memory Allocation:
+   Ensure Docker Desktop is allocated at least 6 GB of RAM.
+
+3. Kafka Initial Startup Delay:
+   If microservices start before Kafka completes topic initialization,
+   simply restart the dependent services:
+   docker compose restart transaction-service fraud-detection-service notification-service
+
+================================================================================
+7. RESUME BULLET POINTS (STAR FORMAT)
+================================================================================
+
+- Architected and delivered an enterprise distributed Banking Microservices Platform
+  utilizing Java 17, Spring Boot 3, Spring Cloud Gateway, MySQL, and Apache Kafka,
+  handling end-to-end account lifecycle, idempotent fund transfers, and real-time fraud mitigation.
+
+- Engineered financial ledger integrity and race condition prevention by implementing
+  JPA Optimistic Concurrency Control (@Version) in Account Service and Distributed
+  Idempotency Key validation in Transaction Service, preventing duplicate debits
+  during high-concurrency bursts and network retries.
+
+- Designed an asynchronous event-driven pipeline via Apache Kafka (KRaft) to decouple
+  payment transfers from non-blocking downstream processes; implemented real-time
+  heuristic rule scoring in Fraud Detection Service and multi-channel customer alerting in Notification Service.
+
+- Implemented end-to-end Full-Stack Observability integrating OpenTelemetry (OTel),
+  Micrometer, Prometheus, and Grafana; instrumented custom business metrics and
+  pre-configured Grafana dashboards for latency, throughput, and JVM heap visualization.
+
+- Standardized structured logging across 5 microservices leveraging SLF4J and MDC,
+  propagating W3C traceparent and X-Correlation-ID across HTTP and Kafka headers
+  to enable 100% distributed trace correlation in Jaeger.
+================================================================================
